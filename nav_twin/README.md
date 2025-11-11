@@ -115,9 +115,6 @@ This project is submitted as part of a Masters in Artificial Intelligence thesis
 
 This is an academic thesis project. Feedback and suggestions are welcome!
 
-## 📄 License
-
-[Your License Here - e.g., MIT, Academic Use Only, etc.]
 
 ## 👤 Author
 
