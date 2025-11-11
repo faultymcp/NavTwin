@@ -1,0 +1,278 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>NavTwin – AI Crowd Prediction Demo (v9)</title>
+<style>
+  html, body { height:100%; margin:0; overflow:hidden; background:#0b1220; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; color:#e5e7eb; }
+  .wrap{ height:100%; display:flex; flex-direction:column; }
+  .top{ flex:0 0 auto; padding:10px 16px; display:flex; align-items:center; justify-content:space-between; gap:10px; border-bottom:1px solid #1f2937; background:#0f172a; }
+  .controls{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .group{ display:flex; align-items:center; gap:8px; background:#111827; border:1px solid #1f2937; padding:6px 10px; border-radius:10px; }
+  label{ font-size:12px; color:#cbd5e1; }
+  input[type=range]{ width:160px }
+  select{ border:1px solid #1f2937; border-radius:8px; padding:6px 8px; background:#0b1220; color:#e5e7eb; font-size:12px }
+  .btn{ cursor:pointer; border:1px solid #334155; background:#0b1220; color:#e5e7eb; border-radius:10px; padding:10px 14px; font-size:13px; font-weight:700 }
+  .btn.primary{ background:#16a34a; color:#041012; border-color:#16a34a }
+  .main{ flex:1 1 auto; display:grid; grid-template-columns: 1fr 1fr; gap:12px; padding:12px; }
+  .panel{ background:#0f172a; border:1px solid #1f2937; border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.35); padding:10px; display:grid; grid-template-rows: auto 1fr auto; }
+  .title{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .subtitle{ color:#94a3b8; font-size:12px }
+  .mapWrap{ display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #map { display:grid; gap:3px; background:#1f2937; padding:3px; border-radius:12px; }
+  .cell{ background:#0b1220; border-radius:6px; position:relative; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#e5e7eb }
+  .path{ background:#3b82f633 }
+  .start{ outline:3px solid #60a5fa }
+  .start::after{ content:'YOU'; position:absolute; top:-16px; left:50%; transform:translateX(-50%); font-size:9px; color:#e5e7eb; background:#1f2937; border:1px solid #334155; border-radius:6px; padding:0 4px }
+  .goal{ outline:3px solid #16a34a }
+  .goal::after{ content:'DEST'; position:absolute; bottom:-16px; left:50%; transform:translateX(-50%); font-size:9px; color:#041012; background:#16a34a; border:1px solid #16a34a; border-radius:6px; padding:0 4px }
+  .crowdIcon{ position:absolute; right:1px; top:1px; font-size:11px }
+  .avoidX{ position:absolute; inset:3px; pointer-events:none }
+  .avoidX:before, .avoidX:after{ content:''; position:absolute; left:0; right:0; top:50%; height:2px; background:#ef4444 }
+  .avoidX:before{ transform:rotate(45deg) }
+  .avoidX:after{ transform:rotate(-45deg) }
+  .box{ background:#0b1220; border:1px solid #334155; border-radius:10px; padding:8px; font-size:12px; color:#cbd5e1; max-height:120px; overflow:auto; }
+  .whyList{ margin:0 0 0 16px; padding:0 }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="controls">
+      <div class="group">
+        <label>Time</label>
+        <select id="hour"></select>
+        <select id="dow">
+          <option value="1">Weekday</option>
+          <option value="6">Weekend</option>
+        </select>
+      </div>
+      <div class="group">
+        <label>Weather</label>
+        <select id="weather">
+          <option value="0">Clear</option>
+          <option value="0.4">Rain</option>
+          <option value="0.8">Storm</option>
+        </select>
+      </div>
+      <div class="group">
+        <label>Max noise <b id="noiseVal">30</b></label>
+        <input id="maxNoise" type="range" min="0" max="100" value="30"/>
+      </div>
+      <div class="group">
+        <label>Avoid crowds</label>
+        <input id="avoidCrowd" type="checkbox" checked/>
+      </div>
+      <button class="btn primary" id="apply">Apply</button>
+      <button class="btn" id="step">Next step ▶</button>
+      <button class="btn" id="reset">Reset</button>
+    </div>
+    <div class="controls">
+      <span class="subtitle">AI predicts crowds using POI type + hour + weekend + weather. Route respects your limits.</span>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="panel">
+      <div class="title"><div><b>AI‑predicted crowd map</b><div class="subtitle">👥 icons = high crowd; red X = avoided</div></div></div>
+      <div class="mapWrap"><div id="map"></div></div>
+      <div class="box">
+        <h4>Why these predictions?</h4>
+        <ul id="whyPred" class="whyList"></ul>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="title"><div><b>Guidance & Explainability</b><div class="subtitle">Stepwise directions + “Why this route?”</div></div></div>
+      <div class="box"><h4>Guidance</h4><ol id="guidance" style="margin:0 0 0 16px"></ol></div>
+      <div class="box"><h4>Why this route?</h4><ul id="whyRoute" class="whyList"></ul></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const W=12,H=9;
+let CELL=26;
+const mapEl=document.getElementById('map');
+function fitCell(){
+  const availableW = window.innerWidth - 48;
+  const availableH = window.innerHeight - 220;
+  const perGridW = (availableW - 12) / 2;
+  const cellW = Math.floor((perGridW - 2*3) / W);
+  const cellH = Math.floor((availableH - 2*3) / H);
+  CELL = Math.max(18, Math.min(36, Math.min(cellW, cellH)));
+  mapEl.style.gridTemplateColumns = `repeat(${W}, ${CELL}px)`;
+  document.querySelectorAll('.cell').forEach(c=>{ c.style.width=CELL+'px'; c.style.height=CELL+'px'; });
+}
+window.addEventListener('resize', fitCell);
+
+// POI grid
+const POI = [];
+for(let y=0;y<H;y++){
+  for(let x=0;x<W;x++){
+    let t="hallway";
+    if((x===2||x===3)&&y<7) t="station";
+    if((x===7||x===8)&&y>1&&y<7) t="cafe";
+    if(x>9 && y<4) t="office";
+    if(x>9 && y>=4) t="library";
+    if((x===5||x===6) && (y===4||y===5)) t="foodcourt";
+    POI.push(t);
+  }
+}
+
+let you=[0,8]; // start
+let goal=[11,1]; // destination
+const hourSel=document.getElementById('hour');
+for(let h=6;h<=22;h++){ const o=document.createElement('option'); o.value=h; o.textContent=(h<10?'0':'')+h+':00'; hourSel.appendChild(o); }
+hourSel.value=8;
+const dowSel=document.getElementById('dow');
+const weatherSel=document.getElementById('weather');
+const maxNoiseEl=document.getElementById('maxNoise');
+const avoidCrowdEl=document.getElementById('avoidCrowd');
+const noiseVal=document.getElementById('noiseVal');
+
+const guidance=document.getElementById('guidance');
+const whyPred=document.getElementById('whyPred');
+const whyRoute=document.getElementById('whyRoute');
+
+function idx(x,y){return y*W+x}
+function inb(x,y){return x>=0&&y>=0&&x<W&&y<H}
+
+function astar(s,g,weights){
+  const key=(x,y)=>x+','+y;
+  const open=new Set([key(s[0],s[1])]);
+  const came=new Map();
+  const gScore=new Map([[key(s[0],s[1]),0]]);
+  const fScore=new Map([[key(s[0],s[1]),Math.abs(s[0]-g[0])+Math.abs(s[1]-g[1])]]);
+  const toXY=k=>k.split(',').map(Number);
+  while(open.size){
+    let current=null, best=Infinity;
+    for(const k of open){const v=fScore.get(k)??Infinity; if(v<best){best=v; current=k;}}
+    const [cx,cy]=toXY(current);
+    if(cx===g[0]&&cy===g[1]){
+      const path=[]; let ck=current; while(ck){const [x,y]=toXY(ck); path.unshift([x,y]); ck=came.get(ck); }
+      return path;
+    }
+    open.delete(current);
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const nx=cx+dx, ny=cy+dy; if(!inb(nx,ny)) continue;
+      const nk=key(nx,ny);
+      const tentative=(gScore.get(current)??Infinity) + weights(idx(nx,ny));
+      if(tentative < (gScore.get(nk)??Infinity)){
+        came.set(nk,current); gScore.set(nk,tentative);
+        fScore.set(nk, tentative + Math.abs(nx-g[0])+Math.abs(ny-g[1]));
+        open.add(nk);
+      }
+    }
+  }
+  return [];
+}
+
+// Predictor
+const poiMultipliers = {cafe:1.6, station:2.0, library:0.8, hallway:0.9, office:1.1, foodcourt:1.7};
+function rushCurve(h){ const m=Math.exp(-((h-8)/2.2)**2); const e=Math.exp(-((h-17.5)/2.5)**2); return 22*(m+e); }
+function mealCurve(h){ const b=Math.exp(-((h-8.5)/1.2)**2); const l=Math.exp(-((h-12.5)/1.4)**2); const d=Math.exp(-((h-18.5)/1.6)**2); return 15*(b+l+d); }
+function predictCrowd(poi, hour, dow, weatherSeverity){
+  const base=20* (poiMultipliers[poi]||1);
+  const rush = rushCurve(hour) * (["station","hallway","office"].includes(poi) ? 1 : 0.4);
+  const meal = mealCurve(hour)  * (["cafe","foodcourt"].includes(poi) ? 1 : 0.3);
+  const weekend = (dow>=6?6:0) * (["mall","foodcourt","cafe"].includes(poi) ? 1 : 0.3);
+  const weather = 10*weatherSeverity;
+  let score = base + rush + meal + weekend + weather;
+  return Math.max(0, Math.min(100, score));
+}
+
+function makePreds(){
+  const hour = +hourSel.value;
+  const dow = +dowSel.value;
+  const weather = +weatherSel.value;
+  const arr = Array.from({length:W*H}, (_,i)=>{
+    const poi=POI[i];
+    return Math.round(predictCrowd(poi, hour, dow, weather));
+  });
+  return {hour,dow,weather,arr};
+}
+
+function recompute(){
+  const {hour,dow,weather,arr:crowds} = makePreds();
+  const maxN = +maxNoiseEl.value;
+  const avoid = avoidCrowdEl.checked;
+
+  mapEl.innerHTML='';
+  const seen={}, whyLines=[];
+  for(let y=0;y<H;y++){
+    for(let x=0;x<W;x++){
+      const d=document.createElement('div'); d.className='cell'; d.style.width=CELL+'px'; d.style.height=CELL+'px';
+      const i=idx(x,y), poi=POI[i], c=crowds[i];
+      if(x===you[0]&&y===you[1]) { d.classList.add('start'); d.textContent='S'; }
+      if(x===goal[0]&&y===goal[1]) { d.classList.add('goal'); d.textContent='D'; }
+      if(c>60){ const icon=document.createElement('div'); icon.className='crowdIcon'; icon.textContent='👥'; d.appendChild(icon); }
+      mapEl.appendChild(d);
+      if(!seen[poi]){ seen[poi]=true;
+        if(poi==="cafe" && c>50) whyLines.push(`<li>Cafés spike around ${hour}:00 → predicted ${c}/100.</li>`);
+        if(poi==="station" && c>50) whyLines.push(`<li>Stations surge at commute times → predicted ${c}/100.</li>`);
+        if(poi==="library" && c<40) whyLines.push(`<li>Libraries stay calmer now → predicted ${c}/100.</li>`);
+      }
+    }
+  }
+  whyPred.innerHTML = whyLines.join('') || '<li>Mixed POIs with time‑based patterns.</li>';
+
+  // route
+  function weight(i){
+    const c=crowds[i];
+    if(avoid && c>60) return 1e9;
+    const wn=Math.max(0, (30 - maxN));
+    return 1 + wn*0.05 + (c/50)*0.2;
+  }
+  const path = astar(you, goal, weight);
+  const cells = mapEl.children;
+  for(const [x,y] of path){ const i=idx(x,y); cells[i].classList.add('path'); if(avoid && crowds[i]>60){ const xmark=document.createElement('div'); xmark.className='avoidX'; cells[i].appendChild(xmark); } }
+
+  // Guidance
+  const dirs=[];
+  for(let i=1;i<path.length;i++){
+    const [x1,y1]=path[i-1], [x2,y2]=path[i];
+    const dx=x2-x1, dy=y2-y1;
+    if(dx===1) dirs.push("Move one step right.");
+    if(dx===-1) dirs.push("Move one step left.");
+    if(dy===1) dirs.push("Move one step down.");
+    if(dy===-1) dirs.push("Move one step up.");
+  }
+  guidance.innerHTML = dirs.map(s=>`<li>${s}</li>`).join("");
+
+  // Why route
+  const around = path.slice(0,12).map(([x,y])=>({x,y,c:crowds[idx(x,y)],poi:POI[idx(x,y)]}));
+  const calm = around.filter(a=>a.c<=40).slice(-3);
+  const hot = around.filter(a=>a.c>60).slice(0,3);
+  whyRoute.innerHTML = [
+    ...calm.map(a=>`<li>Chose calm segment near (${a.x},${a.y}) through ${a.poi} (pred ${a.c}/100).</li>`),
+    ...hot.map(a=>`<li>Avoided hot segment near (${a.x},${a.y}) (${a.poi}) (pred ${a.c}/100).</li>`),
+    avoid ? `<li>Skipped crowded cells (>60) due to “Avoid crowds”.</li>` : `<li>Crowd avoidance off; prioritizing speed.</li>`
+  ].join("");
+}
+
+document.getElementById('apply').onclick=()=>{ noiseVal.textContent=maxNoiseEl.value; recompute(); };
+document.getElementById('reset').onclick=()=>{ you=[0,8]; goal=[11,1]; hourSel.value=8; dowSel.value=1; weatherSel.value=0; maxNoiseEl.value=30; avoidCrowdEl.checked=true; noiseVal.textContent=30; recompute(); };
+document.getElementById('step').onclick=()=>{
+  const prev = you.slice();
+  // single-step greedy toward next planned node
+  // run a short plan then move to second node
+  const {arr:crowds} = makePreds();
+  function weight(i){
+    const c=crowds[i];
+    if(avoidCrowdEl.checked && c>60) return 1e9;
+    const wn=Math.max(0, (30 - +maxNoiseEl.value));
+    return 1 + wn*0.05 + (c/50)*0.2;
+  }
+  const path = astar(you, goal, weight);
+  if(path.length>1){ you = path[1]; }
+  recompute();
+};
+
+fitCell();
+recompute();
+</script>
+</body>
+</html>
